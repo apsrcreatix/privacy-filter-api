@@ -190,7 +190,7 @@ class OPF:
         model: str | os.PathLike[str] | None = None,
         context_window_length: int | None = None,
         trim_whitespace: bool = True,
-        device: Literal["cpu", "cuda"] = "cuda",
+        device: Literal["cpu", "cuda", "mps"] = "cpu",
         output_mode: Literal["typed", "redacted"] = "typed",
         decode_mode: Literal["viterbi", "argmax"] = "viterbi",
         discard_overlapping_predicted_spans: bool = False,
@@ -286,7 +286,7 @@ class OPF:
         self._invalidate_runtime()
         return self
 
-    def set_device(self, *, device: Literal["cpu", "cuda"]) -> OPF:
+    def set_device(self, *, device: Literal["cpu", "cuda", "mps"]) -> OPF:
         """Update the inference device.
 
         Args:

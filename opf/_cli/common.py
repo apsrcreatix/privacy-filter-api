@@ -52,10 +52,17 @@ def add_checkpoint_arg(parser: object) -> None:
 
 def add_device_arg(parser: object) -> None:
     """Add the shared ``--device`` argument."""
+    import torch
+    default_device = "cpu"
+    if torch.cuda.is_available():
+        default_device = "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        default_device = "mps"
+
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda",
+        default=default_device,
         help="Device to run on",
     )
 
