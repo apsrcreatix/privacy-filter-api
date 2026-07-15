@@ -11,11 +11,12 @@ from ._common.checkpoint_download import ensure_default_checkpoint
 from ._core.decoding import ViterbiCRFDecoder, build_sequence_decoder
 from ._common.constants import DEFAULT_MODEL_ENV_VAR, OUTPUT_MODES, SCHEMA_VERSION
 from ._core.runtime import (
-    DetectedSpan,
-    PredictionResult,
-    build_detection_summary,
-    load_inference_runtime,
-    predict_text,
+    DetectedSpan, PredictionResult, build_detection_summary,
+    load_inference_runtime, predict_text,
+)
+from ._core.documents import (
+    DocumentSegment, join_segments, segments_from_ocr, segments_from_paths,
+    segments_from_strings, segments_from_subtitles, segments_from_transcript,
 )
 
 
@@ -81,6 +82,22 @@ class RedactionResult:
         Raises:
             TypeError: If the payload cannot be serialized as JSON.
         """
+        return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False)
+
+
+@dataclass(frozen=True)
+class DocumentRedactionResult:
+    """Redaction output for structured inputs."""
+    schema_version: int
+    redacted_data: object
+    segments: tuple[dict[str, object], ...]
+    warnings: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return {"schema_version": self.schema_version, "redacted_data": self.redacted_data,
+                "segments": list(self.segments), "warnings": list(self.warnings)}
+
+    def to_json(self, *, indent: int | None = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False)
 
 
@@ -272,6 +289,34 @@ class OPF:
             redacted_text=redacted_text,
             warning=_warning_for_prediction(prediction),
         )
+
+    def redact_document(self, document, *, adapter: str = "auto", text_paths=None,
+                        join_separator: str = "\n", decode: DecodeOptions | None = None) -> DocumentRedactionResult:
+        """Redact selected document text without recursively redacting metadata."""
+        if text_paths is not None or adapter == "paths":
+            segments = segments_from_paths(document, text_paths or [])
+        elif adapter in ("strings", "segments") and isinstance(document, list):
+            segments = segments_from_strings(document) if all(isinstance(x, str) for x in document) else segments_from_transcript(document)
+        elif adapter == "ocr": segments = segments_from_ocr(document)
+        elif adapter in ("transcript", "audio"): segments = segments_from_transcript(document)
+        elif adapter in ("subtitle", "subtitles"): segments = segments_from_subtitles(document)
+        else: raise ValueError("document adapter is required for ambiguous JSON")
+        logical = join_segments(segments, join_separator)
+        runtime, decoder = self.get_prediction_components(decode=decode)
+        prediction = predict_text(runtime, logical, decoder=decoder)
+        output = []
+        for segment in segments:
+            base = sum(len(s.text) + len(join_separator) for s in segments[:segment.order])
+            local = [span for span in prediction.spans if span.start < base + len(segment.text) and span.end > base]
+            value = segment.text
+            for span in reversed(local):
+                a, b = max(0, span.start-base), min(len(value), span.end-base)
+                value = value[:a] + span.placeholder + value[b:]
+            output.append({"source_id": segment.source_id, "text": value,
+                           "metadata": dict(segment.metadata), "spans": [{"start": max(0, s.start-base), "end": min(len(segment.text), s.end-base), "label": s.label} for s in local]})
+        data = [item["text"] for item in output] if adapter in ("strings", "segments") else output
+        warning = _warning_for_prediction(prediction)
+        return DocumentRedactionResult(SCHEMA_VERSION, data, tuple(output), (warning,) if warning else ())
 
     def set_model_path(self, model_path: str | os.PathLike[str]) -> OPF:
         """Update the checkpoint directory used by this redactor.

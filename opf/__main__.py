@@ -52,6 +52,27 @@ def build_redaction_parser(*, prog: str | None = None) -> argparse.ArgumentParse
         nargs="?",
         help="Text input to filter.",
     )
+    input_group.add_argument(
+        "--document",
+        type=str,
+        help="Path to a JSON document file for structured redaction.",
+    )
+    input_group.add_argument(
+        "--adapter",
+        choices=("auto", "strings", "segments", "ocr", "transcript", "audio", "subtitle", "subtitles", "paths"),
+        default="auto",
+        help="Document adapter to use. 'auto' attempts to infer from structure.",
+    )
+    input_group.add_argument(
+        "--text-paths",
+        nargs="+",
+        help="Explicit JSON paths to extract text from (e.g. 'pages.text').",
+    )
+    input_group.add_argument(
+        "--join-separator",
+        default="\n",
+        help="Separator used to join segments for long-text prediction (default: \\n).",
+    )
     add_checkpoint_arg(runtime_group)
     add_common_redaction_args(
         parser,
@@ -99,7 +120,7 @@ def _run_redaction_command(argv: Sequence[str], *, prog: str | None = None) -> N
     if args.json_indent < 0:
         raise ValueError("json_indent must be >= 0")
 
-    from ._api import RedactionResult
+    from ._api import RedactionResult, DocumentRedactionResult
     from ._common.terminal_colors import build_label_color_map
     from ._cli.render import (
         build_redactor_from_args,
@@ -131,24 +152,47 @@ def _run_redaction_command(argv: Sequence[str], *, prog: str | None = None) -> N
         if runtime.output_mode != "redacted":
             legend_labels = runtime.label_info.span_class_names
             label_colors = build_label_color_map(legend_labels)
-    for text in iter_inputs(args):
+    # If a specific document is provided, process it once.
+    # Otherwise, process the stream of inputs (files, stdin, or prompt).
+    if args.document:
+        inputs = [None] # Trigger one execution
+    else:
+        inputs = iter_inputs(args)
+
+    for text in inputs:
         infer_start = time.perf_counter()
-        result = redactor.redact(text)
+        if args.document:
+            with open(args.document, "r", encoding="utf-8") as f:
+                document = json.load(f)
+            result = redactor.redact_document(
+                document,
+                adapter=args.adapter,
+                text_paths=args.text_paths,
+                join_separator=args.join_separator,
+            )
+        else:
+            result = redactor.redact(text)
         latency_ms = (time.perf_counter() - infer_start) * 1000.0
         if effective_format == "text":
             print(str(result))
             continue
-        if not isinstance(result, RedactionResult):
-            raise TypeError("json output requires a structured RedactionResult")
-        print(
-            run_summary_line(
-                summary=result.summary,
-                latency_ms=latency_ms,
-            ),
-            file=sys.stderr,
-        )
-        print(json.dumps(result.to_dict(), indent=args.json_indent, ensure_ascii=False))
-        if args.print_color_coded_text and label_colors is not None:
+        if not isinstance(result, (RedactionResult, DocumentRedactionResult)):
+            raise TypeError("json output requires a structured RedactionResult or DocumentRedactionResult")
+        
+        # Resolve summary and JSON data regardless of result type
+        summary = result.summary if hasattr(result, "summary") else None
+        data_dict = result.to_dict()
+        
+        if summary:
+            print(
+                run_summary_line(
+                    summary=summary,
+                    latency_ms=latency_ms,
+                ),
+                file=sys.stderr,
+            )
+        print(json.dumps(data_dict, indent=args.json_indent, ensure_ascii=False))
+        if args.print_color_coded_text and label_colors is not None and hasattr(result, "text"):
             color_coded_text = render_color_coded_text(
                 text=result.text,
                 spans=result.detected_spans,

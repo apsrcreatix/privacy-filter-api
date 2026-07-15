@@ -1,6 +1,6 @@
 """Public OPF package."""
 
-__all__ = ["DecodeOptions", "INHERIT", "OPF", "RedactionResult", "redact"]
+__all__ = ["DecodeOptions", "DocumentRedactionResult", "INHERIT", "OPF", "RedactionResult", "redact"]
 
 
 def redact(text: str) -> str:
@@ -27,6 +27,9 @@ def __getattr__(name: str):
         from ._api import DecodeOptions
 
         return DecodeOptions
+    if name == "DocumentRedactionResult":
+        from ._api import DocumentRedactionResult
+        return DocumentRedactionResult
     if name == "INHERIT":
         from ._api import INHERIT
 

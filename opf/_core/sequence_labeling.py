@@ -130,10 +130,13 @@ def build_label_info(class_names: Sequence[str]) -> LabelInfo:
 def example_to_windows(
     example: TokenizedExample,
     window_size: int,
+    overlap: int = 0,
 ) -> Iterator[Window]:
     """Split a tokenized example into fixed-size windows."""
     if window_size <= 0:
         raise ValueError("window_size must be positive")
+    if overlap < 0 or overlap >= window_size:
+        raise ValueError("overlap must satisfy 0 <= overlap < window_size")
     tokens = example.tokens
     labels = example.labels
     if len(tokens) != len(labels):
@@ -151,7 +154,7 @@ def example_to_windows(
             mask=(),
         )
         return
-    stride = window_size
+    stride = window_size - overlap
     for start in range(0, total_tokens, stride):
         end = min(start + window_size, total_tokens)
         window_tokens = tokens[start:end]

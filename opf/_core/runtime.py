@@ -283,6 +283,7 @@ def predict_text(
     for window in example_to_windows(
         example,
         runtime.n_ctx,
+        overlap=max(1, runtime.n_ctx // 8) if runtime.n_ctx > 1 else 0,
     ):
         if not window.tokens:
             continue
