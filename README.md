@@ -33,36 +33,30 @@ After this, you will have a python script `opf` that can be run directly or via 
 By default, `opf` looks for a model at the directory pointed to by the `OPF_CHECKPOINT` variable, or `~/.opf/privacy_filter`. If a model is not found in the `~/.opf/privacy_filter` location, it will be downloaded.
 
 ```bash
-opf "Alice was born on 1990-01-02."
+opf \"Alice was born on 1990-01-02.\"
 ```
 
-The code supports running both on GPU (by default) and CPU. To run on CPU, use `--device cpu` flag:
+#### Structured Document Redaction
+
+You can redact structured JSON (e.g., OCR results, transcripts, subtitles) while preserving metadata and layout:
 
 ```bash
-opf --device cpu "Alice was born on 1990-01-02."
+opf --document data.json --adapter ocr
 ```
 
-To override the default checkpoint, pass `--checkpoint`:
-
-```bash
-opf --checkpoint /path/to/checkpoint_dir "Alice was born on 1990-01-02."
-```
-
-The redaction mode supports redacting an entire file at once
-
-```bash
-opf -f /path/to/file
-```
-
-The redaction can also be performed via pipes, to support complex one-liners:
-
-```bash
-cat /path/to/file | grep -e 'some_pattern' | opf
-```
-
-If no input is provided, `opf` will start in interactive mode. In this mode, for each input example, the CLI prints structured JSON output, using ANSI color-coded previews if the terminal supports them. These options can be controlled by flags.
-
-Consult `opf redact --help` for more flags and information about the redaction mode.
+Available adapters:
+- `ocr`: For PaddleOCR-like payloads (texts and metadata arrays).
+- `transcript`/`audio`: ultrasound transcript segments.
+- `subtitle`/`subtitles`: For caption/subtitle cues.
+- `paths`: For extracting text from {
+  \"pages\": [
+    {
+      \"text\": \"Some text here\"
+    }
+  ]
+}
+as an example of explicit text-path selection.
+- `auto`: Attempts to infer the correct adapter from the JSON structure.
 
 3. Run eval on a labeled dataset:
 
@@ -70,17 +64,11 @@ Consult `opf redact --help` for more flags and information about the redaction m
 opf eval examples/data/sample_eval_five_examples.jsonl
 ```
 
-The sample eval fixtures under `examples/data/sample_eval_five_examples*.jsonl` are synthetic example data only and do not describe real people or real sensitive records. See `examples/data/README.md`.
-
-Consult `opf eval --help` for more flags and information about the evaluation mode.
-
 4. Finetune on your own labeled dataset:
 
 ```bash
 opf train /path/to/train.jsonl --output-dir /path/to/finetuned_checkpoint
 ```
-
-Consult `opf train --help` for more flags and information about the finetuning mode.
 
 ### Structure
 
@@ -89,12 +77,11 @@ Consult `opf train --help` for more flags and information about the finetuning m
 - `opf/_cli/`: command-line argument parsing and terminal rendering helpers.
 - `opf/_core/`: runtime loading, span conversion, and shared decoding logic.
 - `opf/_eval/`: dataset loading, preprocessing, metrics, and evaluation runners.
-- `opf/_train/`: local finetuning argument parsing and training runners.
+- `opf/_train/`: local finetuning argument and training runners.
 - `opf/_model/`: transformer implementation, checkpoint config, and weight loading.
 - `examples/data/`: sample eval files plus reproducible finetuning demo datasets.
 - `examples/scripts/finetuning/`: runnable finetuning demo harnesses.
 - `FINETUNING.md`: focused finetuning workflow and demo-script guide.
-- `OUTPUT_SCHEMAS.md`: JSON response and export payload formats.
 - `EVAL_AND_OUTPUT_MODES.md`: description of the output modes for redaction and evaluation.
 
 ## Model Details
@@ -131,7 +118,7 @@ Privacy Filter can detect 8 privacy span categories:
 7. `private_date`
 8. `secret`
 
-To perform token-classification, each non-background span category is expanded into boundary-tagged token classes: `B-<label>`, `I-<label>`, `E-<label>`, `S-<label>`, plus the background class, `O`. So the total number of token-level output classes is 33: 1 background class \+ 8 span labels \* 4 boundary tags \= 33 classes. This means the output head emits 33 logits for each token. For a sequence of length T, the output has shape `[T, 33]`; for a batch of size B, it has shape `[B, T, 33]`.
+To perform token-classification, each non-background span category is expanded into boundary-tagged token classes: `B-<label>`, `I-<label>`, `E-<label>`, `S-<label>`, plus the background class, `O`. So the total number of token-level output classes is 33: 1 background class \\+ 8 span labels \\* 4 boundary tags \\= 33 classes. This means the output head emits 33 logits for each token. For a sequence of length T, the output has shape `[T, 33]`; for a batch of size B, it has shape `[B, T, 33]`.
 
 The token-label vocabulary consists of the background label `O` plus BIOES-tagged variants of each privacy category: `account_number`, `private_address`, `private_email`, `private_person`, `private_phone`, `private_url`, `private_date`, and `secret`. In other words, for each category, the model predicts `B-`, `I-`, `E-`, and `S-` forms corresponding to begin, inside, end, and single-token spans. At inference time, these per-token logits are decoded into coherent BIOES span labels using constrained sequence decoding.
 
@@ -139,7 +126,7 @@ The token-label vocabulary consists of the background label `O` plus BIOES-tagge
 
 #### Rationale
 
-After the token classifier produces per-token logits, we decode labels with a constrained Viterbi decoder using linear-chain transition scoring, rather than taking an independent argmax for each token. The decoder enforces allowed BIOES boundary transitions and scores complete label paths with start, transition, and end terms, plus six transition-bias parameters that control background persistence, span entry, span continuation, span closure, and boundary-to-boundary handoff. This global path optimization is intended to improve span coherence and boundary stability by making each token decision depend on sequence-level structure, not just local logits, especially in noisy or mixed-format text where local token decisions alone can produce fragmented or inconsistent boundaries.
+After the token classifier produces per-token logits, we decode labels with a constrained Viterbi decoder using linear-chain transition scoring, rather than taking an independent argmax for each token. The decoder enforces allowed BIOES boundary transitions and scores complete label paths with start, transition, and end terms, plus six transition-bias parameters that control background persistence, span entry, span continuation, and boundary-to-boundary handoff. This global path optimization is intended to improve span coherence and boundary stability by making each token decision depend on sequence-level structure, not just local logits, especially in noisy or mixed-format text where local token decisions alone can produce fragmented or inconsistent boundaries.
 
 #### Operating-Point Calibration
 
@@ -150,7 +137,7 @@ Sequence Decoding parameters can discourage staying in background while encourag
 - Developed by: OpenAI
 - Funded by: OpenAI
 - Shared by: OpenAI
-- Model type: Bidirectional token classification model for privacy span detection
+- Model type: Bidirectional token classification model for privacy span design
 - Language(s): Primarily English; selected multilingual robustness evaluation reported
 - License: [Apache 2.0](LICENSE)
 
@@ -166,7 +153,7 @@ Privacy Filter is a redaction and data minimization aid, not an anonymization, c
 
 ### Limitation: Static Label Policy
 
-The model will only identify personal data spans that match the trained label taxonomy and definitions. Real-life privacy use cases are varied and complex and definitions of appropriate label policies and decision boundaries can differ. Thus model defaults may not satisfy organization-specific governance requirements without calibration/fine-tuning.
+The model will only identify personal data spans that match the trained label taxonomy and definitions. Real-life privacy use cases are varied and complex and definitions of appropriate label policies and decision boundaries can differ. Thus model defaults may not satisfy organization-specific governance requirements without calibration/finetuning.
 
 Privacy Filter does not support configuring label policies dynamically at runtime; instead changing policies requires further finetuning of the model. The native label set and associated decision boundaries may not be appropriate for every use case. For example, the model's training policy aims to prioritize personal identifiers, often preserving context that is not strongly person-linked by design; some users may want to adjust this choice.
 
@@ -174,13 +161,11 @@ Performance may drop on non-English text, non-Latin scripts, protected-group nam
 
 ### Failure Modes
 
-Like all models, Privacy Filter can make mistakes, such as: under-detection of uncommon personal names, regional naming conventions, initials, honorific-heavy references, or domain-specific identifiers; over-redaction of public entities, organizations, locations, or common nouns when local context is ambiguous; fragmented or shifted span boundaries in mixed-format text, long documents, or text with heavy punctuation and layout artifacts; missed secrets for novel credential formats, project-specific token patterns, or secrets split across surrounding syntax; and over-redaction of benign high-entropy strings, placeholders, hashes, sample credentials, or synthetic examples that resemble secrets.
-
-These limitations can interact with demographic, regional, and domain variation. For example, names and identifiers that are underrepresented in training data, or that follow conventions different from the dominant training distribution, may be more likely to be missed or inconsistently bounded.
+Like all models, Privacy Filter can make mistakes, such as: under-detection of uncommon personal names, regional naming conventions, initials, honorific-heavy references, or domain-specific identifiers; over-redaction of public entities, organizations, locations, and common nouns when local context is ambiguous; fragmented or shifted span boundaries in mixed-format text, long documents, or text with heavy punctuation and layout artifacts; missed secrets for novel credential formats, project-specific token patterns, or secrets split across surrounding syntax; and over-e-redaction of benign high-entropy strings, placeholders, hashes, sample credentials, or synthetic examples that resemble secrets.
 
 ### High-Risk Deployment Caution
 
-Additional caution is warranted in high-sensitivity settings such as medical, legal, financial, human resources, education, and government workflows. In these settings, both false negatives and false positives can be costly: missed spans may expose sensitive information, while excess masking can remove material context needed for review, auditing, or downstream decision-making.
+Additional caution is warranted in high-sensitivity settings such as medical, legal, financial, human resources, education, and government workflows. In these settings, both false negatives and false positives can be costly: missed spans may expose sensitive information, while excess masking can remove material context needed for review, auditing, and downstream decision-making.
 
 ### Recommendations
 
